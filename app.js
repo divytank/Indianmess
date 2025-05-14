@@ -37,7 +37,7 @@ const auth = getAuth(app);
 const db = getFirestore(app);
 const provider = new GoogleAuthProvider();
 
-// Enable offline persistence with error handling
+// Enable offline persistence
 enableIndexedDbPersistence(db).catch((err) => {
   if (err.code == 'failed-precondition') {
     console.log("Offline persistence already enabled in another tab");
@@ -63,7 +63,6 @@ initApp();
 async function initApp() {
   setupEventListeners();
   
-  // Auth state listener
   onAuthStateChanged(auth, async (user) => {
     if (user) {
       currentUser = user;
@@ -72,16 +71,15 @@ async function initApp() {
       userNameSpan.textContent = user.displayName;
       
       try {
-        // Initialize user document if doesn't exist
         await handleUserDocument(user);
-        
-        // Load meal options with retry logic
         await loadMealOptionsWithRetry();
         
-        // Show admin panel if user is admin
+        // Always show admin panel for admins
         if (isAdmin) {
           adminSection.style.display = "block";
-          // You can add admin-specific initialization here
+          initializeAdminPanel(); // You can add admin-specific init here
+        } else {
+          adminSection.style.display = "none";
         }
         
       } catch (error) {
@@ -120,29 +118,21 @@ async function loadMealOptionsWithRetry(retryCount = 0) {
   try {
     const today = new Date().toISOString().split('T')[0];
     const docRef = doc(db, "daily_meals", today);
-    
-    // First try to get from cache
     const docSnap = await getDoc(docRef);
     
     if (!docSnap.exists()) {
-      // Create empty document if doesn't exist
       await setDoc(docRef, { date: today });
     }
     
     renderMealOptions(docSnap.exists() ? docSnap.data() : { date: today });
     
   } catch (error) {
-    console.error("Error loading meal options (attempt " + (retryCount + 1) + "):", error);
-    
+    console.error("Error loading meal options:", error);
     if (retryCount < maxRetries) {
-      // Exponential backoff
-      const delay = Math.pow(2, retryCount) * 1000;
-      await new Promise(resolve => setTimeout(resolve, delay));
+      await new Promise(resolve => setTimeout(resolve, 1000 * (retryCount + 1)));
       return loadMealOptionsWithRetry(retryCount + 1);
-    } else {
-      showAlert("Failed to load meal options after multiple attempts. Please check your connection.", "error");
-      throw error;
     }
+    showAlert("Failed to load meal options. Please check connection.", "error");
   }
 }
 
@@ -165,7 +155,6 @@ function renderMealOptions(data) {
   
   mealSelectionDiv.innerHTML = html;
   
-  // Add event listeners
   document.querySelectorAll(".meal-checkbox").forEach(checkbox => {
     checkbox.addEventListener("change", handleMealSelectionChange);
   });
@@ -178,9 +167,9 @@ async function handleMealSelectionChange(e) {
   const originalState = checkbox.checked;
   const mealType = checkbox.id.split('-')[0];
   
-  if (!canChangeSelection()) {
+  if (!isAdmin && !canChangeSelection()) {
     checkbox.checked = !originalState;
-    showAlert("Changes not allowed after 9 PM", "error");
+    showAlert("Changes not allowed after 9 PM for regular users", "error");
     return;
   }
   
@@ -192,7 +181,7 @@ async function handleMealSelectionChange(e) {
     checkbox.checked = !originalState;
     showAlert("Failed to update selection. Please try again.", "error");
   } finally {
-    checkbox.disabled = !canChangeSelection();
+    checkbox.disabled = !isAdmin && !canChangeSelection();
   }
 }
 
@@ -215,7 +204,6 @@ async function updateMealSelection(mealType, isSelected) {
         data[mealType].students.push({
           userId: currentUser.uid,
           name: currentUser.displayName
-          // Removed serverTimestamp from array as it's not supported
         });
         data[mealType].count++;
       } else if (!isSelected && userIndex !== -1) {
@@ -223,7 +211,6 @@ async function updateMealSelection(mealType, isSelected) {
         data[mealType].count--;
       }
       
-      // Add timestamp at document level instead
       data.lastUpdated = serverTimestamp();
       transaction.set(docRef, data);
     });
@@ -238,19 +225,22 @@ async function updateMealSelection(mealType, isSelected) {
 
 // Helper Functions
 function canChangeSelection() {
+  if (isAdmin) return true;
+  
   const now = new Date();
   const cutoff = new Date();
-  cutoff.setHours(21, 0, 0, 0); // 9 PM cutoff
+  cutoff.setHours(21, 0, 0, 0);
   return now < cutoff;
 }
 
 function checkChangeWindow() {
   const canChange = canChangeSelection();
-  document.getElementById("cutoff-time").textContent = canChange ?
-    "Changes allowed until 9 PM" : "Changes locked for today";
+  document.getElementById("cutoff-time").textContent = isAdmin ? 
+    "Admin mode - changes always allowed" : 
+    canChange ? "Changes allowed until 9 PM" : "Changes locked for today";
   
   document.querySelectorAll(".meal-checkbox").forEach(cb => {
-    cb.disabled = !canChange;
+    cb.disabled = !isAdmin && !canChange;
   });
 }
 
@@ -289,7 +279,6 @@ function showAlert(message, type) {
   }, 3000);
 }
 
-// Initialize event listeners
 function setupEventListeners() {
   document.getElementById("googleLogin").addEventListener("click", handleGoogleLogin);
   document.getElementById("logoutBtn").addEventListener("click", handleLogout);
@@ -313,4 +302,10 @@ async function handleLogout() {
     console.error("Logout error:", error);
     showAlert("Logout failed. Please try again.", "error");
   }
-    }
+}
+
+// Admin-specific functions can be added here
+function initializeAdminPanel() {
+  // Add admin panel initialization logic here
+  console.log("Admin panel initialized");
+}
