@@ -20,7 +20,7 @@ import {
   enableIndexedDbPersistence
 } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js";
 
-// Firebase Configuration
+// Firebase Config
 const firebaseConfig = {
   apiKey: "AIzaSyAf22Bo9Zx5H79j-8cxe-des9SK2-A8BEk",
   authDomain: "indian-920df.firebaseapp.com",
@@ -31,18 +31,17 @@ const firebaseConfig = {
   measurementId: "G-QPBY7ZK8J2"
 };
 
-// Initialize Firebase
+// Init Firebase
 const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
 const db = getFirestore(app);
 const provider = new GoogleAuthProvider();
 
-// Enable offline persistence with error handling
 enableIndexedDbPersistence(db).catch((err) => {
-  if (err.code == 'failed-precondition') {
-    console.log("Offline persistence already enabled in another tab");
-  } else if (err.code == 'unimplemented') {
-    console.log("Offline persistence not available");
+  if (err.code === 'failed-precondition') {
+    console.log("Persistence already enabled in another tab");
+  } else if (err.code === 'unimplemented') {
+    console.log("Offline persistence not supported");
   }
 });
 
@@ -51,33 +50,24 @@ const authContainer = document.getElementById("auth-container");
 const appContainer = document.getElementById("app-container");
 const mealSelectionDiv = document.getElementById("meal-selection");
 
-// Global Variables
 let currentUser = null;
 let isAdmin = false;
 
-// Initialize App
+// App Initialization
 initApp();
 
 async function initApp() {
   setupEventListeners();
-  
-  // Auth state listener
   onAuthStateChanged(auth, async (user) => {
     if (user) {
       currentUser = user;
       authContainer.style.display = "none";
       appContainer.style.display = "block";
-      
       try {
-        // Initialize user document if doesn't exist
         await handleUserDocument(user);
-        
-        // Load meal options with retry logic
         await loadMealOptionsWithRetry();
-        
-      } catch (error) {
-        console.error("Initialization error:", error);
-        showAlert("Failed to initialize application. Please refresh.", "error");
+      } catch (err) {
+        showAlert("Failed to initialize. Refresh the page.", "error");
       }
     } else {
       currentUser = null;
@@ -90,7 +80,6 @@ async function initApp() {
 async function handleUserDocument(user) {
   const userRef = doc(db, "users", user.uid);
   const docSnap = await getDoc(userRef);
-  
   if (!docSnap.exists()) {
     await setDoc(userRef, {
       name: user.displayName,
@@ -99,46 +88,33 @@ async function handleUserDocument(user) {
       createdAt: serverTimestamp()
     });
   }
-  
   isAdmin = docSnap.data()?.isAdmin || false;
 }
 
-async function loadMealOptionsWithRetry(retryCount = 0) {
-  const maxRetries = 3;
-  
+async function loadMealOptionsWithRetry(retry = 0) {
+  const maxRetry = 3;
   try {
-    const today = new Date().toISOString().split('T')[0];
+    const today = new Date().toISOString().split("T")[0];
     const docRef = doc(db, "daily_meals", today);
-    
-    // First try to get from cache
     const docSnap = await getDoc(docRef);
-    
     if (!docSnap.exists()) {
-      // Create empty document if doesn't exist
       await setDoc(docRef, { date: today });
     }
-    
     renderMealOptions(docSnap.exists() ? docSnap.data() : { date: today });
-    
-  } catch (error) {
-    console.error("Error loading meal options (attempt " + (retryCount + 1) + "):", error);
-    
-    if (retryCount < maxRetries) {
-      // Exponential backoff
-      const delay = Math.pow(2, retryCount) * 1000;
-      await new Promise(resolve => setTimeout(resolve, delay));
-      return loadMealOptionsWithRetry(retryCount + 1);
+  } catch (err) {
+    if (retry < maxRetry) {
+      await new Promise(r => setTimeout(r, Math.pow(2, retry) * 1000));
+      return loadMealOptionsWithRetry(retry + 1);
     } else {
-      showAlert("Failed to load meal options after multiple attempts. Please check your connection.", "error");
-      throw error;
+      showAlert("Failed to load meal options after retries.", "error");
+      throw err;
     }
   }
 }
 
 function renderMealOptions(data) {
   const meals = ["breakfast", "lunch", "dinner"];
-  let html = '';
-  
+  let html = "";
   meals.forEach(meal => {
     const isChecked = data[meal]?.students?.some(s => s.userId === currentUser.uid) || false;
     html += `
@@ -151,96 +127,76 @@ function renderMealOptions(data) {
       </div>
     `;
   });
-  
   mealSelectionDiv.innerHTML = html;
-  
-  // Add event listeners
-  document.querySelectorAll(".meal-checkbox").forEach(checkbox => {
-    checkbox.addEventListener("change", handleMealSelectionChange);
+  document.querySelectorAll(".meal-checkbox").forEach(cb => {
+    cb.addEventListener("change", handleMealSelectionChange);
   });
-  
   checkChangeWindow();
 }
 
 async function handleMealSelectionChange(e) {
-  const checkbox = e.target;
-  const originalState = checkbox.checked;
-  const mealType = checkbox.id.split('-')[0];
-  
+  const cb = e.target;
+  const mealType = cb.id.split("-")[0];
+  const originalState = cb.checked;
+
   if (!canChangeSelection()) {
-    checkbox.checked = !originalState;
+    cb.checked = !originalState;
     showAlert("Changes not allowed after 9 PM", "error");
     return;
   }
-  
+
   try {
-    checkbox.disabled = true;
-    await updateMealSelection(mealType, checkbox.checked);
-  } catch (error) {
-    console.error("Update failed:", error);
-    checkbox.checked = !originalState;
-    showAlert("Failed to update selection. Please try again.", "error");
+    cb.disabled = true;
+    await updateMealSelection(mealType, cb.checked);
+  } catch (err) {
+    cb.checked = !originalState;
+    showAlert("Failed to update selection", "error");
   } finally {
-    checkbox.disabled = !canChangeSelection();
+    cb.disabled = !canChangeSelection();
   }
 }
 
 async function updateMealSelection(mealType, isSelected) {
-  const today = new Date().toISOString().split('T')[0];
+  const today = new Date().toISOString().split("T")[0];
   const docRef = doc(db, "daily_meals", today);
-  
-  showStatusMessage("Updating your selection...", "info");
-  
-  try {
-    await runTransaction(db, async (transaction) => {
-      const docSnap = await transaction.get(docRef);
-      const data = docSnap.exists() ? docSnap.data() : { date: today };
-      
-      if (!data[mealType]) data[mealType] = { count: 0, students: [] };
-      
-      const userIndex = data[mealType].students.findIndex(s => s.userId === currentUser.uid);
-      
-      // Add user if selected and not already present
-      if (isSelected && userIndex === -1) {
-        data[mealType].students.push({
-          userId: currentUser.uid,
-          name: currentUser.displayName,
-          timestamp: serverTimestamp()  // Store timestamp in the object, not the array
-        });
-        data[mealType].count++;
-      } 
-      // Remove user if unselected and present
-      else if (!isSelected && userIndex !== -1) {
-        data[mealType].students.splice(userIndex, 1);
-        data[mealType].count--;
-      }
-      
-      transaction.set(docRef, data);
-    });
-    
-    showStatusMessage("Selection updated successfully!", "success");
-  } catch (error) {
-    console.error("Transaction error:", error);
-    showStatusMessage(`Update failed: ${error.message}`, "error");
-    throw error;
-  }
+  showStatusMessage("Updating...", "info");
+
+  await runTransaction(db, async (tx) => {
+    const docSnap = await tx.get(docRef);
+    const data = docSnap.exists() ? docSnap.data() : { date: today };
+    if (!data[mealType]) data[mealType] = { count: 0, students: [] };
+
+    const index = data[mealType].students.findIndex(s => s.userId === currentUser.uid);
+    if (isSelected && index === -1) {
+      data[mealType].students.push({
+        userId: currentUser.uid,
+        name: currentUser.displayName,
+        timestamp: new Date().toISOString()  // <== FIXED HERE
+      });
+      data[mealType].count++;
+    } else if (!isSelected && index !== -1) {
+      data[mealType].students.splice(index, 1);
+      data[mealType].count--;
+    }
+
+    tx.set(docRef, data);
+  });
+
+  showStatusMessage("Selection updated!", "success");
 }
 
-// Helper Functions
 function canChangeSelection() {
   const now = new Date();
   const cutoff = new Date();
-  cutoff.setHours(21, 0, 0, 0); // 9 PM cutoff
+  cutoff.setHours(21, 0, 0, 0);
   return now < cutoff;
 }
 
 function checkChangeWindow() {
-  const canChange = canChangeSelection();
-  document.getElementById("cutoff-time").textContent = canChange ?
-    "Changes allowed until 9 PM" : "Changes locked for today";
-  
+  const msg = canChangeSelection() ? "Changes allowed until 9 PM" : "Changes locked for today";
+  document.getElementById("cutoff-time").textContent = msg;
   document.querySelectorAll(".meal-checkbox").forEach(cb => {
-    cb.disabled = !canChange;
+    cb.disabled = !canChangeSelection();
   });
 }
 
@@ -252,12 +208,11 @@ function showStatusMessage(message, type) {
       <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
     </div>
   `;
-  
   setTimeout(() => {
-    const alert = statusDiv.querySelector('.alert');
+    const alert = statusDiv.querySelector(".alert");
     if (alert) {
-      alert.classList.remove('show');
-      setTimeout(() => statusDiv.innerHTML = '', 150);
+      alert.classList.remove("show");
+      setTimeout(() => statusDiv.innerHTML = "", 150);
     }
   }, 3000);
 }
@@ -269,17 +224,13 @@ function showAlert(message, type) {
     ${message}
     <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
   `;
-  
-  const container = document.querySelector(".container");
-  container.prepend(alertDiv);
-  
+  document.querySelector(".container").prepend(alertDiv);
   setTimeout(() => {
     alertDiv.classList.remove("show");
     setTimeout(() => alertDiv.remove(), 150);
   }, 3000);
 }
 
-// Initialize event listeners
 function setupEventListeners() {
   document.getElementById("googleLogin").addEventListener("click", handleGoogleLogin);
   document.getElementById("logoutBtn").addEventListener("click", handleLogout);
@@ -287,20 +238,17 @@ function setupEventListeners() {
 
 async function handleGoogleLogin() {
   try {
-    provider.setCustomParameters({ prompt: 'select_account' });
-    const result = await signInWithPopup(auth, provider);
-    console.log("Login successful:", result.user.uid);
-  } catch (error) {
-    console.error("Login error:", error);
-    showAlert(`Login failed: ${error.message}`, "error");
+    provider.setCustomParameters({ prompt: "select_account" });
+    await signInWithPopup(auth, provider);
+  } catch (err) {
+    showAlert(`Login failed: ${err.message}`, "error");
   }
 }
 
 async function handleLogout() {
   try {
     await signOut(auth);
-  } catch (error) {
-    console.error("Logout error:", error);
-    showAlert("Logout failed. Please try again.", "error");
+  } catch (err) {
+    showAlert("Logout failed", "error");
   }
       }
