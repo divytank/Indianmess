@@ -200,14 +200,17 @@ async function updateMealSelection(mealType, isSelected) {
       
       const userIndex = data[mealType].students.findIndex(s => s.userId === currentUser.uid);
       
+      // Add user if selected and not already present
       if (isSelected && userIndex === -1) {
         data[mealType].students.push({
           userId: currentUser.uid,
           name: currentUser.displayName,
-          timestamp: serverTimestamp()
+          timestamp: serverTimestamp()  // Store timestamp in the object, not the array
         });
         data[mealType].count++;
-      } else if (!isSelected && userIndex !== -1) {
+      } 
+      // Remove user if unselected and present
+      else if (!isSelected && userIndex !== -1) {
         data[mealType].students.splice(userIndex, 1);
         data[mealType].count--;
       }
