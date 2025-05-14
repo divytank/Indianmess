@@ -1,0 +1,98 @@
+/* Base Styles */
+body {
+  font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+  background-color: #f8f9fa;
+  color: #212529;
+}
+
+/* Connection Status */
+#connection-status {
+  position: fixed;
+  bottom: 20px;
+  right: 20px;
+  z-index: 1000;
+  max-width: 400px;
+}
+
+#connection-status.connected {
+  background-color: #28a745;
+  color: white;
+}
+
+#connection-status.disconnected {
+  background-color: #dc3545;
+  color: white;
+  animation: pulse 2s infinite;
+}
+
+#connection-status.warning {
+  background-color: #ffc107;
+  color: #212529;
+}
+
+#connection-badge {
+  font-size: 0.75rem;
+  font-weight: normal;
+}
+
+#connection-badge.connected {
+  background-color: #28a745;
+}
+
+#connection-badge.disconnected {
+  background-color: #dc3545;
+  animation: pulse 2s infinite;
+}
+
+@keyframes pulse {
+  0% { opacity: 1; }
+  50% { opacity: 0.5; }
+  100% { opacity: 1; }
+}
+
+/* Loading Spinner */
+.loading-spinner {
+  display: inline-block;
+  width: 1rem;
+  height: 1rem;
+  border: 2px solid rgba(0,0,0,0.1);
+  border-radius: 50%;
+  border-top-color: #007bff;
+  animation: spin 1s linear infinite;
+  margin-right: 0.5rem;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+/* Meal Selection */
+.meal-option {
+  transition: all 0.2s ease;
+  padding: 0.75rem;
+  border-radius: 0.5rem;
+}
+
+.meal-option:hover {
+  background-color: #f1f1f1;
+}
+
+/* Status Messages */
+#update-status .success {
+  color: #28a745;
+}
+
+#update-status .error {
+  color: #dc3545;
+}
+
+/* Responsive Design */
+@media (max-width: 768px) {
+  .card {
+    margin-bottom: 1rem;
+  }
+  
+  #app-container .row {
+    flex-direction: column;
+  }
+}
