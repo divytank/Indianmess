@@ -25,7 +25,7 @@ const firebaseConfig = {
   apiKey: "AIzaSyAf22Bo9Zx5H79j-8cxe-des9SK2-A8BEk",
   authDomain: "indian-920df.firebaseapp.com",
   projectId: "indian-920df",
-  storageBucket: "indian-920df.firebasestorage.app",
+  storageBucket: "indian-920df.appspot.com",
   messagingSenderId: "126002123087",
   appId: "1:126002123087:web:0cc243473aa1cbcffcf53a",
   measurementId: "G-QPBY7ZK8J2"
@@ -50,9 +50,8 @@ enableIndexedDbPersistence(db).catch((err) => {
 const authContainer = document.getElementById("auth-container");
 const appContainer = document.getElementById("app-container");
 const mealSelectionDiv = document.getElementById("meal-selection");
-
-// Admin Panel
-const adminPanel = document.getElementById("admin-panel");
+const adminSection = document.getElementById("admin-section");
+const userNameSpan = document.getElementById("user-name");
 
 // Global Variables
 let currentUser = null;
@@ -70,6 +69,7 @@ async function initApp() {
       currentUser = user;
       authContainer.style.display = "none";
       appContainer.style.display = "block";
+      userNameSpan.textContent = user.displayName;
       
       try {
         // Initialize user document if doesn't exist
@@ -78,14 +78,22 @@ async function initApp() {
         // Load meal options with retry logic
         await loadMealOptionsWithRetry();
         
+        // Show admin panel if user is admin
+        if (isAdmin) {
+          adminSection.style.display = "block";
+          // You can add admin-specific initialization here
+        }
+        
       } catch (error) {
         console.error("Initialization error:", error);
         showAlert("Failed to initialize application. Please refresh.", "error");
       }
     } else {
       currentUser = null;
+      isAdmin = false;
       authContainer.style.display = "block";
       appContainer.style.display = "none";
+      adminSection.style.display = "none";
     }
   });
 }
@@ -104,11 +112,6 @@ async function handleUserDocument(user) {
   }
   
   isAdmin = docSnap.data()?.isAdmin || false;
-
-  // Show admin panel if user is admin
-  if (isAdmin) {
-    if (adminPanel) adminPanel.style.display = "block";
-  }
 }
 
 async function loadMealOptionsWithRetry(retryCount = 0) {
@@ -211,8 +214,8 @@ async function updateMealSelection(mealType, isSelected) {
       if (isSelected && userIndex === -1) {
         data[mealType].students.push({
           userId: currentUser.uid,
-          name: currentUser.displayName,
-          timestamp: serverTimestamp()
+          name: currentUser.displayName
+          // Removed serverTimestamp from array as it's not supported
         });
         data[mealType].count++;
       } else if (!isSelected && userIndex !== -1) {
@@ -220,6 +223,8 @@ async function updateMealSelection(mealType, isSelected) {
         data[mealType].count--;
       }
       
+      // Add timestamp at document level instead
+      data.lastUpdated = serverTimestamp();
       transaction.set(docRef, data);
     });
     
