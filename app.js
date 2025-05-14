@@ -17,10 +17,8 @@ import {
   getDocs,
   runTransaction,
   serverTimestamp,
-  enableIndexedDbPersistence,
-  onSnapshot
+  enableIndexedDbPersistence
 } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js";
-import { getAnalytics } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-analytics.js";
 
 // Firebase Configuration
 const firebaseConfig = {
@@ -35,108 +33,58 @@ const firebaseConfig = {
 
 // Initialize Firebase
 const app = initializeApp(firebaseConfig);
-const analytics = getAnalytics(app);
 const auth = getAuth(app);
 const db = getFirestore(app);
 const provider = new GoogleAuthProvider();
 
+// Enable offline persistence with error handling
+enableIndexedDbPersistence(db).catch((err) => {
+  if (err.code == 'failed-precondition') {
+    console.log("Offline persistence already enabled in another tab");
+  } else if (err.code == 'unimplemented') {
+    console.log("Offline persistence not available");
+  }
+});
+
+// DOM Elements
+const authContainer = document.getElementById("auth-container");
+const appContainer = document.getElementById("app-container");
+const mealSelectionDiv = document.getElementById("meal-selection");
+
 // Global Variables
 let currentUser = null;
 let isAdmin = false;
-let isOnline = navigator.onLine;
 
 // Initialize App
 initApp();
 
 async function initApp() {
-  // Enable offline persistence
-  try {
-    await enableIndexedDbPersistence(db);
-    console.log("Offline persistence enabled");
-  } catch (err) {
-    if (err.code == 'failed-precondition') {
-      console.warn("Offline persistence already enabled in another tab");
-    } else if (err.code == 'unimplemented') {
-      console.warn("Offline persistence not available");
+  setupEventListeners();
+  
+  // Auth state listener
+  onAuthStateChanged(auth, async (user) => {
+    if (user) {
+      currentUser = user;
+      authContainer.style.display = "none";
+      appContainer.style.display = "block";
+      
+      try {
+        // Initialize user document if doesn't exist
+        await handleUserDocument(user);
+        
+        // Load meal options with retry logic
+        await loadMealOptionsWithRetry();
+        
+      } catch (error) {
+        console.error("Initialization error:", error);
+        showAlert("Failed to initialize application. Please refresh.", "error");
+      }
+    } else {
+      currentUser = null;
+      authContainer.style.display = "block";
+      appContainer.style.display = "none";
     }
-  }
-
-  // Set up connection monitoring
-  setupConnectionMonitoring();
-  
-  // Set up auth state listener
-  onAuthStateChanged(auth, handleAuthStateChange);
-  
-  // Set up event listeners
-  document.getElementById("googleLogin").addEventListener("click", handleGoogleLogin);
-  document.getElementById("logoutBtn").addEventListener("click", handleLogout);
-  document.getElementById("student-date-picker").addEventListener("change", loadStudentDailyData);
-  
-  // Set default date to today
-  document.getElementById("student-date-picker").value = new Date().toISOString().split('T')[0];
-}
-
-function setupConnectionMonitoring() {
-  // Browser connection events
-  window.addEventListener('online', updateConnectionStatus);
-  window.addEventListener('offline', updateConnectionStatus);
-  
-  // Firestore connection state
-  const dbRef = doc(db, "connection", "status");
-  
-  onSnapshot(dbRef, () => {
-    isOnline = true;
-    updateConnectionStatus();
-  }, (error) => {
-    isOnline = false;
-    updateConnectionStatus();
   });
-}
-
-function updateConnectionStatus() {
-  const connectionStatus = document.getElementById("connection-status");
-  const connectionMessage = document.getElementById("connection-message");
-  const connectionBadge = document.getElementById("connection-badge");
-  
-  isOnline = navigator.onLine;
-  
-  if (!isOnline) {
-    // Browser offline
-    connectionMessage.innerHTML = `<i class="bi bi-wifi-off"></i> You're offline - working in limited mode`;
-    connectionStatus.className = "alert alert-warning alert-dismissible fade show mb-3 disconnected";
-    connectionStatus.style.display = "block";
-    connectionBadge.textContent = "Offline";
-    connectionBadge.className = "badge bg-danger disconnected";
-  } else {
-    // Browser online
-    connectionStatus.className = "alert alert-warning alert-dismissible fade show mb-3 connected";
-    connectionStatus.style.display = "none";
-    connectionBadge.textContent = "Online";
-    connectionBadge.className = "badge bg-success connected";
-  }
-}
-
-async function handleAuthStateChange(user) {
-  const authContainer = document.getElementById("auth-container");
-  const appContainer = document.getElementById("app-container");
-  
-  if (user) {
-    currentUser = user;
-    document.getElementById("user-name").textContent = user.displayName || "User";
-    authContainer.style.display = "none";
-    appContainer.style.display = "block";
-    
-    // Check/create user document
-    await handleUserDocument(user);
-    
-    // Initialize meal selection
-    await initMealSelection();
-    
-  } else {
-    currentUser = null;
-    authContainer.style.display = "block";
-    appContainer.style.display = "none";
-  }
 }
 
 async function handleUserDocument(user) {
@@ -152,57 +100,42 @@ async function handleUserDocument(user) {
     });
   }
   
-  // Check admin status
-  isAdmin = (await getDoc(userRef)).data()?.isAdmin || false;
-  document.getElementById("admin-section").style.display = isAdmin ? "block" : "none";
-  
-  if (isAdmin) {
-    loadAdminDashboard();
-    loadStudentDailyData();
-  }
+  isAdmin = docSnap.data()?.isAdmin || false;
 }
 
-async function handleGoogleLogin() {
-  const authStatus = document.getElementById("auth-status");
-  authStatus.innerHTML = `<span class="loading-spinner"></span> Connecting...`;
+async function loadMealOptionsWithRetry(retryCount = 0) {
+  const maxRetries = 3;
   
   try {
-    provider.setCustomParameters({ prompt: 'select_account' });
-    const result = await signInWithPopup(auth, provider);
-    authStatus.textContent = "";
-  } catch (error) {
-    console.error("Login error:", error);
-    authStatus.innerHTML = `<div class="text-danger"><i class="bi bi-exclamation-triangle"></i> Login failed: ${error.message}</div>`;
-  }
-}
-
-async function handleLogout() {
-  try {
-    await signOut(auth);
-    showAlert("Logged out successfully", "success");
-  } catch (error) {
-    console.error("Logout error:", error);
-    showAlert("Logout failed. Please try again.", "error");
-  }
-}
-
-async function initMealSelection() {
-  const today = new Date().toISOString().split('T')[0];
-  const docRef = doc(db, "daily_meals", today);
-  
-  try {
-    const docSnap = await getDoc(docRef);
-    const data = docSnap.exists() ? docSnap.data() : { date: today };
+    const today = new Date().toISOString().split('T')[0];
+    const docRef = doc(db, "daily_meals", today);
     
-    renderMealCheckboxes(data);
-    checkChangeWindow();
+    // First try to get from cache
+    const docSnap = await getDoc(docRef);
+    
+    if (!docSnap.exists()) {
+      // Create empty document if doesn't exist
+      await setDoc(docRef, { date: today });
+    }
+    
+    renderMealOptions(docSnap.exists() ? docSnap.data() : { date: today });
+    
   } catch (error) {
-    console.error("Error loading meal data:", error);
-    showStatusMessage("Failed to load meal options", "error");
+    console.error("Error loading meal options (attempt " + (retryCount + 1) + "):", error);
+    
+    if (retryCount < maxRetries) {
+      // Exponential backoff
+      const delay = Math.pow(2, retryCount) * 1000;
+      await new Promise(resolve => setTimeout(resolve, delay));
+      return loadMealOptionsWithRetry(retryCount + 1);
+    } else {
+      showAlert("Failed to load meal options after multiple attempts. Please check your connection.", "error");
+      throw error;
+    }
   }
 }
 
-function renderMealCheckboxes(data) {
+function renderMealOptions(data) {
   const meals = ["breakfast", "lunch", "dinner"];
   let html = '';
   
@@ -219,12 +152,14 @@ function renderMealCheckboxes(data) {
     `;
   });
   
-  document.getElementById("meal-selection").innerHTML = html;
+  mealSelectionDiv.innerHTML = html;
   
   // Add event listeners
   document.querySelectorAll(".meal-checkbox").forEach(checkbox => {
     checkbox.addEventListener("change", handleMealSelectionChange);
   });
+  
+  checkChangeWindow();
 }
 
 async function handleMealSelectionChange(e) {
@@ -234,7 +169,7 @@ async function handleMealSelectionChange(e) {
   
   if (!canChangeSelection()) {
     checkbox.checked = !originalState;
-    showStatusMessage("Changes not allowed after 9 PM", "error");
+    showAlert("Changes not allowed after 9 PM", "error");
     return;
   }
   
@@ -244,7 +179,7 @@ async function handleMealSelectionChange(e) {
   } catch (error) {
     console.error("Update failed:", error);
     checkbox.checked = !originalState;
-    showStatusMessage("Failed to update selection. Please try again.", "error");
+    showAlert("Failed to update selection. Please try again.", "error");
   } finally {
     checkbox.disabled = !canChangeSelection();
   }
@@ -288,175 +223,7 @@ async function updateMealSelection(mealType, isSelected) {
   }
 }
 
-// Admin Functions
-async function loadAdminDashboard() {
-  try {
-    await loadDailySummary();
-    await loadWeeklyTrend();
-  } catch (error) {
-    console.error("Admin dashboard error:", error);
-    showStatusMessage("Failed to load admin data", "error");
-  }
-}
-
-async function loadDailySummary() {
-  const today = new Date().toISOString().split('T')[0];
-  const docSnap = await getDoc(doc(db, "daily_meals", today));
-  
-  if (docSnap.exists()) {
-    const data = docSnap.data();
-    document.querySelector("#today-summary tbody").innerHTML = `
-      <tr><td>Breakfast</td><td>${data.breakfast?.count || 0}</td></tr>
-      <tr><td>Lunch</td><td>${data.lunch?.count || 0}</td></tr>
-      <tr><td>Dinner</td><td>${data.dinner?.count || 0}</td></tr>
-    `;
-  }
-}
-
-async function loadWeeklyTrend() {
-  const weekDates = getWeekDates(new Date());
-  const q = query(
-    collection(db, "daily_meals"),
-    where("date", "in", weekDates)
-  );
-  
-  try {
-    const querySnapshot = await getDocs(q);
-    const weeklyData = {};
-    
-    querySnapshot.forEach(doc => {
-      weeklyData[doc.id] = doc.data();
-    });
-    
-    renderWeeklyChart(weekDates, weeklyData);
-  } catch (error) {
-    console.error("Error loading weekly data:", error);
-    showStatusMessage("Failed to load weekly trends", "error");
-  }
-}
-
-async function loadStudentDailyData() {
-  const selectedDate = document.getElementById("student-date-picker").value;
-  const container = document.getElementById("students-daily-data");
-  container.innerHTML = "<div class='text-center py-3'><span class='loading-spinner'></span> Loading...</div>";
-  
-  try {
-    const [usersSnapshot, mealDoc] = await Promise.all([
-      getDocs(collection(db, "users")),
-      getDoc(doc(db, "daily_meals", selectedDate))
-    ]);
-    
-    const users = usersSnapshot.docs.map(d => ({ id: d.id, ...d.data() }));
-    const mealData = mealDoc.exists() ? mealDoc.data() : null;
-    
-    if (!mealData) {
-      container.innerHTML = "<div class='text-center py-3 text-muted'>No data available for this date</div>";
-      return;
-    }
-    
-    renderStudentData(users, mealData, container);
-  } catch (error) {
-    console.error("Error loading student data:", error);
-    container.innerHTML = "<div class='text-center py-3 text-danger'>Failed to load data</div>";
-  }
-}
-
 // Helper Functions
-function renderWeeklyChart(labels, data) {
-  const ctx = document.getElementById("weeklyChart").getContext('2d');
-  
-  // Destroy previous chart if exists
-  if (window.weeklyChart) {
-    window.weeklyChart.destroy();
-  }
-  
-  window.weeklyChart = new Chart(ctx, {
-    type: 'bar',
-    data: {
-      labels: labels,
-      datasets: [
-        { 
-          label: 'Breakfast', 
-          data: labels.map(d => data[d]?.breakfast?.count || 0), 
-          backgroundColor: 'rgba(66, 133, 244, 0.7)',
-          borderColor: 'rgba(66, 133, 244, 1)',
-          borderWidth: 1
-        },
-        { 
-          label: 'Lunch', 
-          data: labels.map(d => data[d]?.lunch?.count || 0), 
-          backgroundColor: 'rgba(52, 168, 83, 0.7)',
-          borderColor: 'rgba(52, 168, 83, 1)',
-          borderWidth: 1
-        },
-        { 
-          label: 'Dinner', 
-          data: labels.map(d => data[d]?.dinner?.count || 0), 
-          backgroundColor: 'rgba(234, 67, 53, 0.7)',
-          borderColor: 'rgba(234, 67, 53, 1)',
-          borderWidth: 1
-        }
-      ]
-    },
-    options: {
-      responsive: true,
-      scales: {
-        y: {
-          beginAtZero: true,
-          ticks: {
-            precision: 0
-          }
-        }
-      }
-    }
-  });
-}
-
-function renderStudentData(users, mealData, container) {
-  let html = `
-    <table class="table table-hover">
-      <thead class="table-light">
-        <tr>
-          <th>Student</th>
-          <th>Breakfast</th>
-          <th>Lunch</th>
-          <th>Dinner</th>
-        </tr>
-      </thead>
-      <tbody>
-  `;
-  
-  users.forEach(user => {
-    const breakfastStatus = mealData.breakfast?.students?.some(s => s.userId === user.id) ? '✓' : '✗';
-    const lunchStatus = mealData.lunch?.students?.some(s => s.userId === user.id) ? '✓' : '✗';
-    const dinnerStatus = mealData.dinner?.students?.some(s => s.userId === user.id) ? '✓' : '✗';
-    
-    html += `
-      <tr>
-        <td>${user.name || user.email}</td>
-        <td class="${breakfastStatus === '✓' ? 'text-success' : 'text-danger'}">${breakfastStatus}</td>
-        <td class="${lunchStatus === '✓' ? 'text-success' : 'text-danger'}">${lunchStatus}</td>
-        <td class="${dinnerStatus === '✓' ? 'text-success' : 'text-danger'}">${dinnerStatus}</td>
-      </tr>
-    `;
-  });
-  
-  html += "</tbody></table>";
-  container.innerHTML = html;
-}
-
-function getWeekDates(date) {
-  const day = date.getDay();
-  const startDate = new Date(date);
-  startDate.setDate(date.getDate() - day);
-  
-  return Array.from({ length: 7 }, (_, i) => {
-    const d = new Date(startDate);
-    d.setDate(startDate.getDate() + i);
-    return d.toISOString().split('T')[0];
-  });
-}
-
 function canChangeSelection() {
   const now = new Date();
   const cutoff = new Date();
@@ -508,3 +275,29 @@ function showAlert(message, type) {
     setTimeout(() => alertDiv.remove(), 150);
   }, 3000);
 }
+
+// Initialize event listeners
+function setupEventListeners() {
+  document.getElementById("googleLogin").addEventListener("click", handleGoogleLogin);
+  document.getElementById("logoutBtn").addEventListener("click", handleLogout);
+}
+
+async function handleGoogleLogin() {
+  try {
+    provider.setCustomParameters({ prompt: 'select_account' });
+    const result = await signInWithPopup(auth, provider);
+    console.log("Login successful:", result.user.uid);
+  } catch (error) {
+    console.error("Login error:", error);
+    showAlert(`Login failed: ${error.message}`, "error");
+  }
+}
+
+async function handleLogout() {
+  try {
+    await signOut(auth);
+  } catch (error) {
+    console.error("Logout error:", error);
+    showAlert("Logout failed. Please try again.", "error");
+  }
+      }
