@@ -3,6 +3,7 @@ body {
   font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
   background-color: #f8f9fa;
   color: #212529;
+  min-height: 100vh;
 }
 
 /* Connection Status */
@@ -17,6 +18,7 @@ body {
 #connection-status.connected {
   background-color: #28a745;
   color: white;
+  display: none;
 }
 
 #connection-status.disconnected {
@@ -50,7 +52,7 @@ body {
   100% { opacity: 1; }
 }
 
-/* Loading Spinner */
+/* Loading States */
 .loading-spinner {
   display: inline-block;
   width: 1rem;
@@ -66,6 +68,15 @@ body {
   to { transform: rotate(360deg); }
 }
 
+/* Status Messages */
+#update-status .success {
+  color: #28a745;
+}
+
+#update-status .error {
+  color: #dc3545;
+}
+
 /* Meal Selection */
 .meal-option {
   transition: all 0.2s ease;
@@ -77,13 +88,9 @@ body {
   background-color: #f1f1f1;
 }
 
-/* Status Messages */
-#update-status .success {
-  color: #28a745;
-}
-
-#update-status .error {
-  color: #dc3545;
+/* Admin Dashboard */
+.nav-tabs .nav-link.active {
+  font-weight: 600;
 }
 
 /* Responsive Design */
@@ -94,5 +101,10 @@ body {
   
   #app-container .row {
     flex-direction: column;
+  }
+  
+  #connection-status {
+    bottom: 70px;
+    right: 10px;
   }
 }
