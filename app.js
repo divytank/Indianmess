@@ -308,4 +308,4 @@ async function handleLogout() {
     console.error("Logout error:", error);
     showAlert("Logout failed. Please try again.", "error");
   }
-        }
+    }
