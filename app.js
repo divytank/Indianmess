@@ -17,7 +17,8 @@ import {
   getDocs,
   runTransaction,
   serverTimestamp,
-  enableIndexedDbPersistence
+  enableIndexedDbPersistence,
+  onSnapshot
 } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js";
 
 // Firebase Configuration
@@ -56,12 +57,14 @@ const todaySummaryTable = document.getElementById("today-summary").querySelector
 const weeklyChartCanvas = document.getElementById("weeklyChart");
 const studentsDailyData = document.getElementById("students-daily-data");
 const studentDatePicker = document.getElementById("student-date-picker");
+const monthlyReportContainer = document.getElementById("monthly-report");
 
 // Global Variables
 let currentUser = null;
 let isAdmin = false;
 let weeklyChart = null;
 let allUsersCache = []; // Cache for all users data
+let unsubscribeFunctions = []; // To store real-time listeners
 
 // Meal cutoff times (24-hour format)
 const MEAL_CUTOFF_TIMES = {
@@ -97,6 +100,7 @@ async function initApp() {
         if (isAdmin) {
           adminSection.style.display = "block";
           initializeAdminPanel();
+          setupRealTimeListeners();
           loadAdminData();
         } else {
           adminSection.style.display = "none";
@@ -107,6 +111,10 @@ async function initApp() {
         showAlert("Failed to initialize application. Please refresh.", "error");
       }
     } else {
+      // Clean up real-time listeners
+      unsubscribeFunctions.forEach(unsub => unsub());
+      unsubscribeFunctions = [];
+      
       currentUser = null;
       isAdmin = false;
       authContainer.style.display = "block";
@@ -114,6 +122,53 @@ async function initApp() {
       adminSection.style.display = "none";
     }
   });
+}
+
+function setupRealTimeListeners() {
+  if (!isAdmin) return;
+  
+  // Clean up any existing listeners
+  unsubscribeFunctions.forEach(unsub => unsub());
+  unsubscribeFunctions = [];
+  
+  // Today's data real-time listener
+  const today = new Date().toISOString().split('T')[0];
+  const todayRef = doc(db, "daily_meals", today);
+  const unsubscribeToday = onSnapshot(todayRef, (doc) => {
+    if (doc.exists()) {
+      renderMealOptions(doc.data());
+      loadTodaySummary();
+    }
+  });
+  unsubscribeFunctions.push(unsubscribeToday);
+  
+  // Weekly data real-time listener (last 7 days)
+  const endDate = new Date();
+  const startDate = new Date();
+  startDate.setDate(endDate.getDate() - 6);
+  
+  for (let d = new Date(startDate); d <= endDate; d.setDate(d.getDate() + 1)) {
+    const dateStr = d.toISOString().split('T')[0];
+    const dateRef = doc(db, "daily_meals", dateStr);
+    const unsubscribeDate = onSnapshot(dateRef, () => {
+      loadWeeklyStudentReport();
+    });
+    unsubscribeFunctions.push(unsubscribeDate);
+  }
+  
+  // Monthly data real-time listener (last 30 days)
+  const monthlyEndDate = new Date();
+  const monthlyStartDate = new Date();
+  monthlyStartDate.setDate(monthlyEndDate.getDate() - 30);
+  
+  for (let d = new Date(monthlyStartDate); d <= monthlyEndDate; d.setDate(d.getDate() + 1)) {
+    const dateStr = d.toISOString().split('T')[0];
+    const dateRef = doc(db, "daily_meals", dateStr);
+    const unsubscribeDate = onSnapshot(dateRef, () => {
+      loadMonthlyStudentReport();
+    });
+    unsubscribeFunctions.push(unsubscribeDate);
+  }
 }
 
 async function handleUserDocument(user) {
@@ -252,11 +307,6 @@ async function updateMealSelection(mealType, isSelected) {
     });
     
     showStatusMessage("Selection updated successfully!", "success");
-    
-    // Refresh admin data if admin is viewing
-    if (isAdmin) {
-      loadAdminData();
-    }
   } catch (error) {
     console.error("Transaction error:", error);
     showStatusMessage(`Update failed: ${error.message}`, "error");
@@ -272,7 +322,8 @@ function initializeAdminPanel() {
   // Add event listeners for admin tabs
   document.getElementById('today-tab').addEventListener('click', () => loadTodaySummary());
   document.getElementById('weekly-tab').addEventListener('click', () => loadWeeklyStudentReport());
-  document.getElementById('students-tab').addEventListener('click', () => loadMonthlyStudentReport());
+  document.getElementById('daily-tab').addEventListener('click', () => loadDailyStudentReport());
+  document.getElementById('monthly-tab').addEventListener('click', () => loadMonthlyStudentReport());
   
   // Date picker change event
   studentDatePicker.addEventListener('change', () => loadDailyStudentReport());
@@ -281,6 +332,7 @@ function initializeAdminPanel() {
 async function loadAdminData() {
   await loadTodaySummary();
   await loadWeeklyStudentReport();
+  await loadMonthlyStudentReport();
 }
 
 async function loadTodaySummary() {
@@ -389,7 +441,7 @@ async function loadWeeklyStudentReport() {
 
   html += `</tbody></table></div>`;
   weeklyChartCanvas.parentElement.innerHTML = `
-    <h4 class="mb-3">Weekly Student Meal Participation</h4>
+    <h4 class="mb-3">Weekly Student Meal Participation (Last 7 Days)</h4>
     ${html}
   `;
 }
@@ -470,8 +522,8 @@ async function loadMonthlyStudentReport() {
   });
 
   html += `</tbody></table></div>`;
-  studentsDailyData.innerHTML = `
-    <h4 class="mb-3">Monthly Student Meal Participation</h4>
+  monthlyReportContainer.innerHTML = `
+    <h4 class="mb-3">Monthly Student Meal Participation (Last 30 Days)</h4>
     ${html}
   `;
 }
@@ -651,4 +703,4 @@ async function handleLogout() {
     console.error("Logout error:", error);
     showAlert("Logout failed. Please try again.", "error");
   }
-      }
+}
