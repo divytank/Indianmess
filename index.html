@@ -70,7 +70,10 @@
                     <button class="nav-link" id="weekly-tab" data-bs-toggle="tab" data-bs-target="#weekly" type="button">Weekly</button>
                   </li>
                   <li class="nav-item" role="presentation">
-                    <button class="nav-link" id="students-tab" data-bs-toggle="tab" data-bs-target="#students" type="button">Students</button>
+                    <button class="nav-link" id="daily-tab" data-bs-toggle="tab" data-bs-target="#daily" type="button">Date View</button>
+                  </li>
+                  <li class="nav-item" role="presentation">
+                    <button class="nav-link" id="monthly-tab" data-bs-toggle="tab" data-bs-target="#monthly" type="button">Monthly</button>
                   </li>
                 </ul>
                 <div class="tab-content p-3 border border-top-0 rounded-bottom">
@@ -83,12 +86,15 @@
                   <div class="tab-pane fade" id="weekly" role="tabpanel">
                     <canvas id="weeklyChart" height="200"></canvas>
                   </div>
-                  <div class="tab-pane fade" id="students" role="tabpanel">
+                  <div class="tab-pane fade" id="daily" role="tabpanel">
                     <div class="mb-3">
                       <label class="form-label">Select Date:</label>
                       <input type="date" id="student-date-picker" class="form-control" value="">
                     </div>
                     <div id="students-daily-data" class="table-responsive"></div>
+                  </div>
+                  <div class="tab-pane fade" id="monthly" role="tabpanel">
+                    <div id="monthly-report" class="table-responsive"></div>
                   </div>
                 </div>
               </div>
