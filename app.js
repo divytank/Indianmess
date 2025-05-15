@@ -62,6 +62,13 @@ let currentUser = null;
 let isAdmin = false;
 let weeklyChart = null;
 
+// Meal cutoff times (24-hour format)
+const MEAL_CUTOFF_TIMES = {
+  breakfast: 11, // 11 AM
+  lunch: 14,     // 2 PM
+  dinner: 21     // 9 PM
+};
+
 // Initialize App
 initApp();
 
@@ -126,7 +133,21 @@ async function loadMealOptionsWithRetry(retryCount = 0) {
     const docSnap = await getDoc(docRef);
     
     if (!docSnap.exists()) {
-      await setDoc(docRef, { date: today });
+      // Initialize with all users marked as not selected
+      const usersSnapshot = await getDocs(collection(db, "users"));
+      const allUsers = usersSnapshot.docs.map(doc => ({
+        userId: doc.id,
+        name: doc.data().name,
+        selected: false
+      }));
+      
+      await setDoc(docRef, {
+        date: today,
+        breakfast: { count: 0, students: [] },
+        lunch: { count: 0, students: [] },
+        dinner: { count: 0, students: [] },
+        allUsers: allUsers
+      });
     }
     
     renderMealOptions(docSnap.exists() ? docSnap.data() : { date: today });
@@ -147,12 +168,15 @@ function renderMealOptions(data) {
   
   meals.forEach(meal => {
     const isChecked = data[meal]?.students?.some(s => s.userId === currentUser.uid) || false;
+    const isDisabled = !isAdmin && !canChangeSelection(meal);
+    
     html += `
       <div class="form-check form-switch mb-3">
         <input class="form-check-input meal-checkbox" type="checkbox" 
-               id="${meal}-check" ${isChecked ? 'checked' : ''}>
+               id="${meal}-check" ${isChecked ? 'checked' : ''} ${isDisabled ? 'disabled' : ''}>
         <label class="form-check-label" for="${meal}-check">
           ${meal.charAt(0).toUpperCase() + meal.slice(1)}
+          ${isDisabled ? '<span class="badge bg-secondary ms-2">Closed</span>' : ''}
         </label>
       </div>
     `;
@@ -164,7 +188,7 @@ function renderMealOptions(data) {
     checkbox.addEventListener("change", handleMealSelectionChange);
   });
   
-  checkChangeWindow();
+  updateCutoffTimeDisplay();
 }
 
 async function handleMealSelectionChange(e) {
@@ -172,9 +196,11 @@ async function handleMealSelectionChange(e) {
   const originalState = checkbox.checked;
   const mealType = checkbox.id.split('-')[0];
   
-  if (!isAdmin && !canChangeSelection()) {
+  if (!isAdmin && !canChangeSelection(mealType)) {
     checkbox.checked = !originalState;
-    showAlert("Changes not allowed after 9 PM for regular users", "error");
+    showAlert(`Changes not allowed after ${MEAL_CUTOFF_TIMES[mealType] > 12 ? 
+              MEAL_CUTOFF_TIMES[mealType]-12 + ' PM' : 
+              MEAL_CUTOFF_TIMES[mealType] + ' AM'}`, "error");
     return;
   }
   
@@ -186,7 +212,7 @@ async function handleMealSelectionChange(e) {
     checkbox.checked = !originalState;
     showAlert("Failed to update selection. Please try again.", "error");
   } finally {
-    checkbox.disabled = !isAdmin && !canChangeSelection();
+    checkbox.disabled = !isAdmin && !canChangeSelection(mealType);
   }
 }
 
@@ -386,19 +412,25 @@ async function loadStudentsData() {
     const data = docSnap.data();
     const allStudents = {};
     
-    // Collect all unique students for the day
+    // Initialize with all users
+    if (data.allUsers) {
+      data.allUsers.forEach(user => {
+        allStudents[user.userId] = {
+          name: user.name,
+          breakfast: false,
+          lunch: false,
+          dinner: false
+        };
+      });
+    }
+    
+    // Update with actual selections
     ["breakfast", "lunch", "dinner"].forEach(meal => {
       if (data[meal]?.students) {
         data[meal].students.forEach(student => {
-          if (!allStudents[student.userId]) {
-            allStudents[student.userId] = {
-              name: student.name,
-              breakfast: false,
-              lunch: false,
-              dinner: false
-            };
+          if (allStudents[student.userId]) {
+            allStudents[student.userId][meal] = true;
           }
-          allStudents[student.userId][meal] = true;
         });
       }
     });
@@ -427,23 +459,47 @@ async function loadStudentsData() {
 }
 
 // Helper Functions
-function canChangeSelection() {
+function canChangeSelection(mealType) {
   if (isAdmin) return true;
   
   const now = new Date();
+  const cutoffHour = MEAL_CUTOFF_TIMES[mealType];
   const cutoff = new Date();
-  cutoff.setHours(21, 0, 0, 0);
+  cutoff.setHours(cutoffHour, 0, 0, 0);
   return now < cutoff;
 }
 
-function checkChangeWindow() {
-  const canChange = canChangeSelection();
-  document.getElementById("cutoff-time").textContent = isAdmin ? 
-    "Admin mode - changes always allowed" : 
-    canChange ? "Changes allowed until 9 PM" : "Changes locked for today";
+function updateCutoffTimeDisplay() {
+  const now = new Date();
+  let nextCutoff = null;
+  let nextMeal = null;
   
-  document.querySelectorAll(".meal-checkbox").forEach(cb => {
-    cb.disabled = !isAdmin && !canChange;
+  // Find the next cutoff time
+  for (const [meal, hour] of Object.entries(MEAL_CUTOFF_TIMES)) {
+    const cutoff = new Date();
+    cutoff.setHours(hour, 0, 0, 0);
+    
+    if (cutoff > now && (!nextCutoff || cutoff < nextCutoff)) {
+      nextCutoff = cutoff;
+      nextMeal = meal;
+    }
+  }
+  
+  if (nextCutoff) {
+    const timeString = nextCutoff.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    document.getElementById("cutoff-time").textContent = 
+      isAdmin ? "Admin mode - changes always allowed" :
+      `Changes allowed until ${timeString} for ${nextMeal}`;
+  } else {
+    document.getElementById("cutoff-time").textContent = 
+      isAdmin ? "Admin mode - changes always allowed" :
+      "Changes locked for today";
+  }
+  
+  // Update checkbox disabled states
+  document.querySelectorAll(".meal-checkbox").forEach(checkbox => {
+    const mealType = checkbox.id.split('-')[0];
+    checkbox.disabled = !isAdmin && !canChangeSelection(mealType);
   });
 }
 
