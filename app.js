@@ -52,10 +52,15 @@ const appContainer = document.getElementById("app-container");
 const mealSelectionDiv = document.getElementById("meal-selection");
 const adminSection = document.getElementById("admin-section");
 const userNameSpan = document.getElementById("user-name");
+const todaySummaryTable = document.getElementById("today-summary").querySelector("tbody");
+const weeklyChartCanvas = document.getElementById("weeklyChart");
+const studentsDailyData = document.getElementById("students-daily-data");
+const studentDatePicker = document.getElementById("student-date-picker");
 
 // Global Variables
 let currentUser = null;
 let isAdmin = false;
+let weeklyChart = null;
 
 // Initialize App
 initApp();
@@ -74,10 +79,10 @@ async function initApp() {
         await handleUserDocument(user);
         await loadMealOptionsWithRetry();
         
-        // Always show admin panel for admins
         if (isAdmin) {
           adminSection.style.display = "block";
-          initializeAdminPanel(); // You can add admin-specific init here
+          initializeAdminPanel();
+          loadAdminData();
         } else {
           adminSection.style.display = "none";
         }
@@ -216,11 +221,209 @@ async function updateMealSelection(mealType, isSelected) {
     });
     
     showStatusMessage("Selection updated successfully!", "success");
+    
+    // Refresh admin data if admin is viewing
+    if (isAdmin) {
+      loadAdminData();
+    }
   } catch (error) {
     console.error("Transaction error:", error);
     showStatusMessage(`Update failed: ${error.message}`, "error");
     throw error;
   }
+}
+
+// Admin Panel Functions
+function initializeAdminPanel() {
+  // Set default date for student date picker
+  studentDatePicker.value = new Date().toISOString().split('T')[0];
+  
+  // Add event listeners for admin tabs
+  document.getElementById('today-tab').addEventListener('click', () => loadTodaySummary());
+  document.getElementById('weekly-tab').addEventListener('click', () => loadWeeklySummary());
+  document.getElementById('students-tab').addEventListener('click', () => loadStudentsData());
+  
+  // Date picker change event
+  studentDatePicker.addEventListener('change', () => loadStudentsData());
+}
+
+async function loadAdminData() {
+  await loadTodaySummary();
+  await loadWeeklySummary();
+  await loadStudentsData();
+}
+
+async function loadTodaySummary() {
+  const today = new Date().toISOString().split('T')[0];
+  const docSnap = await getDoc(doc(db, "daily_meals", today));
+  
+  todaySummaryTable.innerHTML = '';
+  
+  if (docSnap.exists()) {
+    const data = docSnap.data();
+    const meals = ["breakfast", "lunch", "dinner"];
+    
+    meals.forEach(meal => {
+      const row = document.createElement('tr');
+      row.innerHTML = `
+        <td>${meal.charAt(0).toUpperCase() + meal.slice(1)}</td>
+        <td>${data[meal]?.count || 0}</td>
+      `;
+      todaySummaryTable.appendChild(row);
+    });
+  }
+}
+
+async function loadWeeklySummary() {
+  const endDate = new Date();
+  const startDate = new Date();
+  startDate.setDate(endDate.getDate() - 6); // Last 7 days
+  
+  const dates = [];
+  for (let d = new Date(startDate); d <= endDate; d.setDate(d.getDate() + 1)) {
+    dates.push(new Date(d).toISOString().split('T')[0]);
+  }
+  
+  const mealData = {
+    breakfast: [],
+    lunch: [],
+    dinner: []
+  };
+  
+  // Get data for each day
+  for (const date of dates) {
+    const docSnap = await getDoc(doc(db, "daily_meals", date));
+    if (docSnap.exists()) {
+      const data = docSnap.data();
+      mealData.breakfast.push(data.breakfast?.count || 0);
+      mealData.lunch.push(data.lunch?.count || 0);
+      mealData.dinner.push(data.dinner?.count || 0);
+    } else {
+      mealData.breakfast.push(0);
+      mealData.lunch.push(0);
+      mealData.dinner.push(0);
+    }
+  }
+  
+  // Format dates for chart labels
+  const labels = dates.map(date => {
+    const d = new Date(date);
+    return d.toLocaleDateString('en-US', { weekday: 'short' });
+  });
+  
+  // Create or update chart
+  const ctx = weeklyChartCanvas.getContext('2d');
+  
+  if (weeklyChart) {
+    weeklyChart.data.labels = labels;
+    weeklyChart.data.datasets[0].data = mealData.breakfast;
+    weeklyChart.data.datasets[1].data = mealData.lunch;
+    weeklyChart.data.datasets[2].data = mealData.dinner;
+    weeklyChart.update();
+  } else {
+    weeklyChart = new Chart(ctx, {
+      type: 'bar',
+      data: {
+        labels: labels,
+        datasets: [
+          {
+            label: 'Breakfast',
+            data: mealData.breakfast,
+            backgroundColor: 'rgba(255, 99, 132, 0.7)'
+          },
+          {
+            label: 'Lunch',
+            data: mealData.lunch,
+            backgroundColor: 'rgba(54, 162, 235, 0.7)'
+          },
+          {
+            label: 'Dinner',
+            data: mealData.dinner,
+            backgroundColor: 'rgba(255, 206, 86, 0.7)'
+          }
+        ]
+      },
+      options: {
+        responsive: true,
+        scales: {
+          y: {
+            beginAtZero: true,
+            title: {
+              display: true,
+              text: 'Number of Students'
+            }
+          },
+          x: {
+            title: {
+              display: true,
+              text: 'Day of Week'
+            }
+          }
+        }
+      }
+    });
+  }
+}
+
+async function loadStudentsData() {
+  const selectedDate = studentDatePicker.value;
+  const docSnap = await getDoc(doc(db, "daily_meals", selectedDate));
+  
+  let html = `
+    <table class="table table-striped">
+      <thead>
+        <tr>
+          <th>Student Name</th>
+          <th>Breakfast</th>
+          <th>Lunch</th>
+          <th>Dinner</th>
+        </tr>
+      </thead>
+      <tbody>
+  `;
+  
+  if (docSnap.exists()) {
+    const data = docSnap.data();
+    const allStudents = {};
+    
+    // Collect all unique students for the day
+    ["breakfast", "lunch", "dinner"].forEach(meal => {
+      if (data[meal]?.students) {
+        data[meal].students.forEach(student => {
+          if (!allStudents[student.userId]) {
+            allStudents[student.userId] = {
+              name: student.name,
+              breakfast: false,
+              lunch: false,
+              dinner: false
+            };
+          }
+          allStudents[student.userId][meal] = true;
+        });
+      }
+    });
+    
+    // Generate table rows
+    Object.values(allStudents).forEach(student => {
+      html += `
+        <tr>
+          <td>${student.name}</td>
+          <td>${student.breakfast ? '✓' : '✗'}</td>
+          <td>${student.lunch ? '✓' : '✗'}</td>
+          <td>${student.dinner ? '✓' : '✗'}</td>
+        </tr>
+      `;
+    });
+  } else {
+    html += `
+      <tr>
+        <td colspan="4" class="text-center">No data available for this date</td>
+      </tr>
+    `;
+  }
+  
+  html += `</tbody></table>`;
+  studentsDailyData.innerHTML = html;
 }
 
 // Helper Functions
@@ -302,10 +505,4 @@ async function handleLogout() {
     console.error("Logout error:", error);
     showAlert("Logout failed. Please try again.", "error");
   }
-}
-
-// Admin-specific functions can be added here
-function initializeAdminPanel() {
-  // Add admin panel initialization logic here
-  console.log("Admin panel initialized");
 }
