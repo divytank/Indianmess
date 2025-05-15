@@ -61,6 +61,7 @@ const studentDatePicker = document.getElementById("student-date-picker");
 let currentUser = null;
 let isAdmin = false;
 let weeklyChart = null;
+let allUsersCache = []; // Cache for all users data
 
 // Meal cutoff times (24-hour format)
 const MEAL_CUTOFF_TIMES = {
@@ -84,6 +85,13 @@ async function initApp() {
       
       try {
         await handleUserDocument(user);
+        // Load all users into cache
+        const usersSnapshot = await getDocs(collection(db, "users"));
+        allUsersCache = usersSnapshot.docs.map(doc => ({
+          id: doc.id,
+          name: doc.data().name
+        }));
+        
         await loadMealOptionsWithRetry();
         
         if (isAdmin) {
@@ -133,20 +141,17 @@ async function loadMealOptionsWithRetry(retryCount = 0) {
     const docSnap = await getDoc(docRef);
     
     if (!docSnap.exists()) {
-      // Initialize with all users marked as not selected
-      const usersSnapshot = await getDocs(collection(db, "users"));
-      const allUsers = usersSnapshot.docs.map(doc => ({
-        userId: doc.id,
-        name: doc.data().name,
-        selected: false
-      }));
-      
+      // Initialize with all users
       await setDoc(docRef, {
         date: today,
         breakfast: { count: 0, students: [] },
         lunch: { count: 0, students: [] },
         dinner: { count: 0, students: [] },
-        allUsers: allUsers
+        allUsers: allUsersCache.map(user => ({
+          userId: user.id,
+          name: user.name,
+          selected: false
+        }))
       });
     }
     
@@ -266,17 +271,16 @@ function initializeAdminPanel() {
   
   // Add event listeners for admin tabs
   document.getElementById('today-tab').addEventListener('click', () => loadTodaySummary());
-  document.getElementById('weekly-tab').addEventListener('click', () => loadWeeklySummary());
-  document.getElementById('students-tab').addEventListener('click', () => loadStudentsData());
+  document.getElementById('weekly-tab').addEventListener('click', () => loadWeeklyStudentReport());
+  document.getElementById('students-tab').addEventListener('click', () => loadMonthlyStudentReport());
   
   // Date picker change event
-  studentDatePicker.addEventListener('change', () => loadStudentsData());
+  studentDatePicker.addEventListener('change', () => loadDailyStudentReport());
 }
 
 async function loadAdminData() {
   await loadTodaySummary();
-  await loadWeeklySummary();
-  await loadStudentsData();
+  await loadWeeklyStudentReport();
 }
 
 async function loadTodaySummary() {
@@ -300,7 +304,7 @@ async function loadTodaySummary() {
   }
 }
 
-async function loadWeeklySummary() {
+async function loadWeeklyStudentReport() {
   const endDate = new Date();
   const startDate = new Date();
   startDate.setDate(endDate.getDate() - 6); // Last 7 days
@@ -309,140 +313,223 @@ async function loadWeeklySummary() {
   for (let d = new Date(startDate); d <= endDate; d.setDate(d.getDate() + 1)) {
     dates.push(new Date(d).toISOString().split('T')[0]);
   }
+
+  // Get meal data for each day
+  const studentMeals = {};
   
-  const mealData = {
-    breakfast: [],
-    lunch: [],
-    dinner: []
-  };
-  
-  // Get data for each day
+  // Initialize with all users
+  allUsersCache.forEach(user => {
+    studentMeals[user.id] = {
+      name: user.name,
+      days: {}
+    };
+    
+    dates.forEach(date => {
+      studentMeals[user.id].days[date] = {
+        breakfast: false,
+        lunch: false,
+        dinner: false
+      };
+    });
+  });
+
+  // Populate with actual data
   for (const date of dates) {
     const docSnap = await getDoc(doc(db, "daily_meals", date));
     if (docSnap.exists()) {
       const data = docSnap.data();
-      mealData.breakfast.push(data.breakfast?.count || 0);
-      mealData.lunch.push(data.lunch?.count || 0);
-      mealData.dinner.push(data.dinner?.count || 0);
-    } else {
-      mealData.breakfast.push(0);
-      mealData.lunch.push(0);
-      mealData.dinner.push(0);
+      
+      ["breakfast", "lunch", "dinner"].forEach(meal => {
+        if (data[meal]?.students) {
+          data[meal].students.forEach(student => {
+            if (studentMeals[student.userId]) {
+              studentMeals[student.userId].days[date][meal] = true;
+            }
+          });
+        }
+      });
     }
   }
-  
-  // Format dates for chart labels
-  const labels = dates.map(date => {
+
+  // Generate HTML table
+  let html = `
+    <div class="table-responsive">
+      <table class="table table-striped table-bordered">
+        <thead class="table-dark">
+          <tr>
+            <th>Student Name</th>
+  `;
+
+  // Add date headers
+  dates.forEach(date => {
     const d = new Date(date);
-    return d.toLocaleDateString('en-US', { weekday: 'short' });
+    html += `<th>${d.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })}</th>`;
   });
-  
-  // Create or update chart
-  const ctx = weeklyChartCanvas.getContext('2d');
-  
-  if (weeklyChart) {
-    weeklyChart.data.labels = labels;
-    weeklyChart.data.datasets[0].data = mealData.breakfast;
-    weeklyChart.data.datasets[1].data = mealData.lunch;
-    weeklyChart.data.datasets[2].data = mealData.dinner;
-    weeklyChart.update();
-  } else {
-    weeklyChart = new Chart(ctx, {
-      type: 'bar',
-      data: {
-        labels: labels,
-        datasets: [
-          {
-            label: 'Breakfast',
-            data: mealData.breakfast,
-            backgroundColor: 'rgba(255, 99, 132, 0.7)'
-          },
-          {
-            label: 'Lunch',
-            data: mealData.lunch,
-            backgroundColor: 'rgba(54, 162, 235, 0.7)'
-          },
-          {
-            label: 'Dinner',
-            data: mealData.dinner,
-            backgroundColor: 'rgba(255, 206, 86, 0.7)'
-          }
-        ]
-      },
-      options: {
-        responsive: true,
-        scales: {
-          y: {
-            beginAtZero: true,
-            title: {
-              display: true,
-              text: 'Number of Students'
-            }
-          },
-          x: {
-            title: {
-              display: true,
-              text: 'Day of Week'
-            }
-          }
-        }
-      }
+
+  html += `</tr></thead><tbody>`;
+
+  // Add student rows
+  allUsersCache.forEach(user => {
+    if (!studentMeals[user.id]) return;
+    
+    html += `<tr><td>${user.name}</td>`;
+    
+    dates.forEach(date => {
+      const day = studentMeals[user.id].days[date];
+      const meals = [];
+      if (day.breakfast) meals.push('B');
+      if (day.lunch) meals.push('L');
+      if (day.dinner) meals.push('D');
+      
+      html += `<td class="text-center">${meals.join('/') || '-'}</td>`;
     });
-  }
+    
+    html += `</tr>`;
+  });
+
+  html += `</tbody></table></div>`;
+  weeklyChartCanvas.parentElement.innerHTML = `
+    <h4 class="mb-3">Weekly Student Meal Participation</h4>
+    ${html}
+  `;
 }
 
-async function loadStudentsData() {
+async function loadMonthlyStudentReport() {
+  const endDate = new Date();
+  const startDate = new Date();
+  startDate.setMonth(endDate.getMonth() - 1); // Last 30 days
+  
+  const dates = [];
+  for (let d = new Date(startDate); d <= endDate; d.setDate(d.getDate() + 1)) {
+    dates.push(new Date(d).toISOString().split('T')[0]);
+  }
+
+  // Get meal data for each student
+  const studentMeals = {};
+  
+  // Initialize with all users
+  allUsersCache.forEach(user => {
+    studentMeals[user.id] = {
+      name: user.name,
+      breakfast: 0,
+      lunch: 0,
+      dinner: 0,
+      total: 0
+    };
+  });
+
+  // Populate with actual data
+  for (const date of dates) {
+    const docSnap = await getDoc(doc(db, "daily_meals", date));
+    if (docSnap.exists()) {
+      const data = docSnap.data();
+      
+      ["breakfast", "lunch", "dinner"].forEach(meal => {
+        if (data[meal]?.students) {
+          data[meal].students.forEach(student => {
+            if (studentMeals[student.userId]) {
+              studentMeals[student.userId][meal]++;
+              studentMeals[student.userId].total++;
+            }
+          });
+        }
+      });
+    }
+  }
+
+  // Generate HTML table
+  let html = `
+    <div class="table-responsive">
+      <table class="table table-striped table-bordered">
+        <thead class="table-dark">
+          <tr>
+            <th>Student Name</th>
+            <th class="text-center">Breakfast</th>
+            <th class="text-center">Lunch</th>
+            <th class="text-center">Dinner</th>
+            <th class="text-center">Total</th>
+          </tr>
+        </thead>
+        <tbody>
+  `;
+
+  // Add student rows
+  allUsersCache.forEach(user => {
+    if (!studentMeals[user.id]) return;
+    
+    const meals = studentMeals[user.id];
+    html += `
+      <tr>
+        <td>${user.name}</td>
+        <td class="text-center">${meals.breakfast}</td>
+        <td class="text-center">${meals.lunch}</td>
+        <td class="text-center">${meals.dinner}</td>
+        <td class="text-center">${meals.total}</td>
+      </tr>
+    `;
+  });
+
+  html += `</tbody></table></div>`;
+  studentsDailyData.innerHTML = `
+    <h4 class="mb-3">Monthly Student Meal Participation</h4>
+    ${html}
+  `;
+}
+
+async function loadDailyStudentReport() {
   const selectedDate = studentDatePicker.value;
   const docSnap = await getDoc(doc(db, "daily_meals", selectedDate));
   
   let html = `
-    <table class="table table-striped">
-      <thead>
-        <tr>
-          <th>Student Name</th>
-          <th>Breakfast</th>
-          <th>Lunch</th>
-          <th>Dinner</th>
-        </tr>
-      </thead>
-      <tbody>
+    <div class="table-responsive">
+      <table class="table table-striped table-bordered">
+        <thead class="table-dark">
+          <tr>
+            <th>Student Name</th>
+            <th class="text-center">Breakfast</th>
+            <th class="text-center">Lunch</th>
+            <th class="text-center">Dinner</th>
+          </tr>
+        </thead>
+        <tbody>
   `;
   
   if (docSnap.exists()) {
     const data = docSnap.data();
-    const allStudents = {};
+    const studentStatus = {};
     
-    // Initialize with all users
-    if (data.allUsers) {
-      data.allUsers.forEach(user => {
-        allStudents[user.userId] = {
-          name: user.name,
-          breakfast: false,
-          lunch: false,
-          dinner: false
-        };
-      });
-    }
+    // Initialize with all users as not selected
+    allUsersCache.forEach(user => {
+      studentStatus[user.id] = {
+        name: user.name,
+        breakfast: false,
+        lunch: false,
+        dinner: false
+      };
+    });
     
     // Update with actual selections
     ["breakfast", "lunch", "dinner"].forEach(meal => {
       if (data[meal]?.students) {
         data[meal].students.forEach(student => {
-          if (allStudents[student.userId]) {
-            allStudents[student.userId][meal] = true;
+          if (studentStatus[student.userId]) {
+            studentStatus[student.userId][meal] = true;
           }
         });
       }
     });
     
     // Generate table rows
-    Object.values(allStudents).forEach(student => {
+    allUsersCache.forEach(user => {
+      if (!studentStatus[user.id]) return;
+      
+      const status = studentStatus[user.id];
       html += `
         <tr>
-          <td>${student.name}</td>
-          <td>${student.breakfast ? '✓' : '✗'}</td>
-          <td>${student.lunch ? '✓' : '✗'}</td>
-          <td>${student.dinner ? '✓' : '✗'}</td>
+          <td>${user.name}</td>
+          <td class="text-center">${status.breakfast ? '✓' : '✗'}</td>
+          <td class="text-center">${status.lunch ? '✓' : '✗'}</td>
+          <td class="text-center">${status.dinner ? '✓' : '✗'}</td>
         </tr>
       `;
     });
@@ -454,8 +541,11 @@ async function loadStudentsData() {
     `;
   }
   
-  html += `</tbody></table>`;
-  studentsDailyData.innerHTML = html;
+  html += `</tbody></table></div>`;
+  studentsDailyData.innerHTML = `
+    <h4 class="mb-3">Daily Student Meal Participation - ${new Date(selectedDate).toLocaleDateString()}</h4>
+    ${html}
+  `;
 }
 
 // Helper Functions
@@ -561,4 +651,4 @@ async function handleLogout() {
     console.error("Logout error:", error);
     showAlert("Logout failed. Please try again.", "error");
   }
-}
+      }
